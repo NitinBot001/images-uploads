@@ -6,8 +6,9 @@ import string
 from PIL import Image
 from werkzeug.utils import secure_filename
 import logging
-from github import Github
+import requests
 import base64
+import json
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = '/tmp/images'  # Use /tmp for Vercel
@@ -15,7 +16,8 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
 # GitHub configuration (use environment variables for Vercel)
 GITHUB_PAT = os.getenv('GITHUB_PAT', 'your-personal-access-token')  # Set in Vercel dashboard
-GITHUB_REPO = os.getenv('GITHUB_REPO', 'NitinBot001/EasyFarms_assets.git')  # e.g., 'your-username/your-repo'
+GITHUB_REPO = 'NitinBot001/EasyFarms_assets' # e.g., 'your-username/your-repo'
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -64,7 +66,7 @@ def rename_and_save_image(file):
         return None
 
 def push_images_to_github():
-    """Check images directory and push to GitHub using GitHub API, then clear the directory."""
+    """Check images directory and push to GitHub using REST API, then clear the directory."""
     try:
         # Check if images directory exists and has files
         if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -78,49 +80,65 @@ def push_images_to_github():
         
         logger.info(f"Found {len(image_files)} images to push.")
 
-        # Initialize GitHub client
-        g = Github(GITHUB_PAT)
-        repo = g.get_repo(GITHUB_REPO)
-        
+        headers = {
+            "Authorization": f"token {GITHUB_PAT}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+
         # Process each image
         for image_file in image_files:
             image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_file)
             github_path = f"images/{image_file}"
             
-            # Read image content
+            # Read and encode image content
             with open(image_path, 'rb') as f:
-                content = f.read()
+                content = base64.b64encode(f.read()).decode('utf-8')
             
-            # Encode content to base64
-            encoded_content = base64.b64encode(content).decode('utf-8')
+            # Check if file exists
+            response = requests.get(
+                f"{GITHUB_API_URL}/{github_path}",
+                headers=headers
+            )
             
-            # Check if file exists in repo
-            try:
-                # Get existing file
-                file = repo.get_contents(github_path)
-                # Update file
-                repo.update_file(
-                    path=github_path,
-                    message=f"Update image {image_file}",
-                    content=content,
-                    sha=file.sha,
-                    branch="main"
+            payload = {
+                "message": f"Add or update image {image_file}",
+                "content": content,
+                "branch": "main"
+            }
+            
+            if response.status_code == 200:
+                # File exists, update it
+                file_data = response.json()
+                payload["sha"] = file_data["sha"]
+                put_response = requests.put(
+                    f"{GITHUB_API_URL}/{github_path}",
+                    headers=headers,
+                    data=json.dumps(payload)
                 )
+                if put_response.status_code not in (200, 201):
+                    logger.error(f"Failed to update {image_file}: {put_response.text}")
+                    continue
                 logger.info(f"Updated {image_file} in GitHub.")
-            except:
-                # Create new file
-                repo.create_file(
-                    path=github_path,
-                    message=f"Add image {image_file}",
-                    content=content,
-                    branch="main"
+            else:
+                # File does not exist, create it
+                put_response = requests.put(
+                    f"{GITHUB_API_URL}/{github_path}",
+                    headers=headers,
+                    data=json.dumps(payload)
                 )
+                if put_response.status_code not in (200, 201):
+                    logger.error(f"Failed to create {image_file}: {put_response.text}")
+                    continue
                 logger.info(f"Created {image_file} in GitHub.")
         
-        # Clear the images directory
-        shutil.rmtree(app.config['UPLOAD_FOLDER'])
-        logger.info("Cleared images directory after push.")
-        return True, "Successfully pushed images to GitHub."
+        # Check if any images were successfully uploaded
+        if image_files:
+            # Clear the images directory
+            shutil.rmtree(app.config['UPLOAD_FOLDER'])
+            logger.info("Cleared images directory after push.")
+            return True, "Successfully pushed images to GitHub."
+        else:
+            return False, "No images were successfully pushed."
             
     except Exception as e:
         logger.error(f"Error pushing to GitHub: {str(e)}")
