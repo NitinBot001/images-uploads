@@ -5,19 +5,17 @@ import random
 import string
 from PIL import Image
 from werkzeug.utils import secure_filename
-import git
-import shutil
 import logging
-from pathlib import Path
+from github import Github
+import base64
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = '/tmp/images'  # Use /tmp for Vercel
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
 # GitHub configuration (use environment variables for Vercel)
-GITHUB_REPO_URL = os.getenv('GITHUB_REPO_URL', 'https://github.com/NitinBot001/EasyFarms_assets.git')
 GITHUB_PAT = os.getenv('GITHUB_PAT', 'your-personal-access-token')  # Set in Vercel dashboard
-REPO_DIR = '/tmp/repo'  # Use /tmp for Vercel
+GITHUB_REPO = os.getenv('GITHUB_REPO', 'NitinBot001/EasyFarms_assets.git)  # e.g., 'your-username/your-repo'
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -66,7 +64,7 @@ def rename_and_save_image(file):
         return None
 
 def push_images_to_github():
-    """Check images directory and push to GitHub if images exist, then clear the directory."""
+    """Check images directory and push to GitHub using GitHub API, then clear the directory."""
     try:
         # Check if images directory exists and has files
         if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -80,42 +78,49 @@ def push_images_to_github():
         
         logger.info(f"Found {len(image_files)} images to push.")
 
-        # Initialize or clone the repository
-        if not os.path.exists(REPO_DIR):
-            # Clone the repository
-            repo_url_with_pat = GITHUB_REPO_URL.replace('https://', f'https://{GITHUB_PAT}@')
-            git.Repo.clone_from(repo_url_with_pat, REPO_DIR)
-        repo = git.Repo(REPO_DIR)
+        # Initialize GitHub client
+        g = Github(GITHUB_PAT)
+        repo = g.get_repo(GITHUB_REPO)
         
-        # Create images directory in repo if it doesn't exist
-        repo_images_dir = os.path.join(REPO_DIR, 'images')
-        if not os.path.exists(repo_images_dir):
-            os.makedirs(repo_images_dir)
-        
-        # Copy images from app's images directory to repo's images directory
+        # Process each image
         for image_file in image_files:
-            src_path = os.path.join(app.config['UPLOAD_FOLDER'], image_file)
-            dst_path = os.path.join(repo_images_dir, image_file)
-            shutil.copy2(src_path, dst_path)
+            image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_file)
+            github_path = f"images/{image_file}"
+            
+            # Read image content
+            with open(image_path, 'rb') as f:
+                content = f.read()
+            
+            # Encode content to base64
+            encoded_content = base64.b64encode(content).decode('utf-8')
+            
+            # Check if file exists in repo
+            try:
+                # Get existing file
+                file = repo.get_contents(github_path)
+                # Update file
+                repo.update_file(
+                    path=github_path,
+                    message=f"Update image {image_file}",
+                    content=content,
+                    sha=file.sha,
+                    branch="main"
+                )
+                logger.info(f"Updated {image_file} in GitHub.")
+            except:
+                # Create new file
+                repo.create_file(
+                    path=github_path,
+                    message=f"Add image {image_file}",
+                    content=content,
+                    branch="main"
+                )
+                logger.info(f"Created {image_file} in GitHub.")
         
-        # Git operations
-        repo.git.add('images/')
-        if repo.is_dirty():
-            commit_message = f"Add images {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            repo.index.commit(commit_message)
-            
-            # Push to remote
-            origin = repo.remote(name='origin')
-            origin.push()
-            logger.info("Successfully pushed images to GitHub.")
-            
-            # Clear the images directory
-            shutil.rmtree(app.config['UPLOAD_FOLDER'])
-            logger.info("Cleared images directory after push.")
-            return True, "Successfully pushed images to GitHub."
-        else:
-            logger.info("No changes to commit.")
-            return False, "No changes to commit."
+        # Clear the images directory
+        shutil.rmtree(app.config['UPLOAD_FOLDER'])
+        logger.info("Cleared images directory after push.")
+        return True, "Successfully pushed images to GitHub."
             
     except Exception as e:
         logger.error(f"Error pushing to GitHub: {str(e)}")
@@ -269,10 +274,6 @@ def upload_page():
                 'results': results
             }), 200
     return render_template('upload.html')
-
-# For Vercel compatibility (optional handler, not strictly needed)
-def handler(event, context):
-    return app
 
 if __name__ == '__main__':
     # Run locally for development
