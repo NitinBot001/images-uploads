@@ -9,15 +9,17 @@ import logging
 import requests
 import base64
 import json
+import threading
+import time
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = '/tmp/images'  # Use /tmp for Vercel
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
 # GitHub configuration (use environment variables for Vercel)
-GITHUB_PAT = os.getenv('GITHUB_PAT', 'your-personal-access-token')  # Set in Vercel dashboard
-GITHUB_REPO = 'NitinBot001/EasyFarms_assets' # e.g., 'your-username/your-repo'
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents"
+GITHUB_PAT = os.getenv('GITHUB_PAT', 'your-personal-access-token')  # Set in Vrcel dashboard
+GITHUB_REPO = "NitinBot001/EasyFarms_assets"  # e.g., 'your-username/your-repo'
+GITHUB_API_URL = f"https:/api.github.com/repos/{GITHUB_REPO}/contents"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -144,6 +146,13 @@ def push_images_to_github():
         logger.error(f"Error pushing to GitHub: {str(e)}")
         return False, f"Error pushing to GitHub: {str(e)}"
 
+def github_push_worker():
+    """Worker to push images to GitHub every 10 minutes."""
+    while True:
+        logger.info("Worker checking for images to push...")
+        push_images_to_github()
+        time.sleep(600)  # Sleep for 10 minutes (600 seconds)
+
 @app.route('/api/upload', methods=['POST'])
 def upload_image():
     """Endpoint to upload a single image."""
@@ -235,21 +244,6 @@ def batch_upload_images():
         'results': results
     }), status_code
 
-@app.route('/api/trigger-push', methods=['POST'])
-def trigger_push():
-    """Endpoint to manually trigger GitHub push."""
-    success, message = push_images_to_github()
-    if success:
-        return jsonify({
-            'status': 'success',
-            'message': message
-        }), 200
-    else:
-        return jsonify({
-            'status': 'error',
-            'message': message
-        }), 400
-
 # Optional: Web interface for testing
 @app.route('/', methods=['GET', 'POST'])
 def upload_page():
@@ -292,6 +286,10 @@ def upload_page():
                 'results': results
             }), 200
     return render_template('upload.html')
+
+# Start the worker thread
+worker_thread = threading.Thread(target=github_push_worker, daemon=True)
+worker_thread.start()
 
 if __name__ == '__main__':
     # Run locally for development
