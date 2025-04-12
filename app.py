@@ -3,6 +3,7 @@ import os
 import datetime
 import random
 import string
+import shutil  # Added to fix 'name shutil is not defined'
 from PIL import Image
 from werkzeug.utils import secure_filename
 import logging
