@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Images</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .message {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+        input[type="file"] {
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload Images</h1>
+    <h2>Single Image</h2>
+    <form id="singleForm" enctype="multipart/form-data">
+        <input type="file" name="file" accept="image/*">
+        <br>
+        <button type="submit">Upload Single</button>
+    </form>
+    <h2>Batch Images</h2>
+    <form id="batchForm" enctype="multipart/form-data">
+        <input type="file" name="files" accept="image/*" multiple>
+        <br>
+        <button type="submit">Upload Batch</button>
+    </form>
+    <div id="result"></div>
+
+    <script>
+        document.getElementById('singleForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const response = await fetch('/', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+            displayResult(result);
+        });
+
+        document.getElementById('batchForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const response = await fetch('/', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+            displayResult(result);
+        });
+
+        function displayResult(result) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '';
+            if (result.status === 'success') {
+                if (result.filename) {
+                    resultDiv.innerHTML = `<p class="message">Uploaded: ${result.filename}</p>`;
+                } else if (result.results) {
+                    result.results.forEach(r => {
+                        resultDiv.innerHTML += `<p class="${r.status === 'success' ? 'message' : 'error'}">${r.status === 'success' ? 'Uploaded: ' + r.new_filename : 'Error: ' + r.filename}</p>`;
+                    });
+                }
+            } else {
+                resultDiv.innerHTML = `<p class="error">${result.message}</p>`;
+            }
+        }
+    </script>
+</body>
+  </html>
