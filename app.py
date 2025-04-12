@@ -15,7 +15,7 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
 # GitHub configuration (use environment variables for Vercel)
 GITHUB_PAT = os.getenv('GITHUB_PAT', 'your-personal-access-token')  # Set in Vercel dashboard
-GITHUB_REPO = os.getenv('GITHUB_REPO', 'NitinBot001/EasyFarms_assets.git)  # e.g., 'your-username/your-repo'
+GITHUB_REPO = os.getenv('GITHUB_REPO', 'NitinBot001/EasyFarms_assets.git')  # e.g., 'your-username/your-repo'
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
