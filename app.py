@@ -167,6 +167,7 @@ def upload_image():
         if new_filename:
             return jsonify({
                 'status': 'success',
+                'url' :f'https://raw.githubusercontent.com/NitinBot001/EasyFarms_assets/refs/heads/main/images/{new_filename}',
                 'message': f'Image uploaded and saved as: {new_filename}',
                 'filename': new_filename
             }), 200
@@ -205,6 +206,7 @@ def batch_upload_images():
             if new_filename:
                 results.append({
                     'filename': file.filename,
+                    'url' :f'https://raw.githubusercontent.com/NitinBot001/EasyFarms_assets/refs/heads/main/images/{new_filename}',
                     'new_filename': new_filename,
                     'status': 'success',
                     'message': f'Image saved as: {new_filename}'
