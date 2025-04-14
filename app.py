@@ -13,6 +13,7 @@ import threading
 import time
 import shutil
 import io
+import urllib.parse
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = '/tmp/images'
@@ -20,9 +21,10 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB for Render
 
 # GitLab configuration
-GITLAB_PAT = os.getenv('GITLAB_PAT')
-GITLAB_PROJECT_ID = os.getenv('GITLAB_PROJECT_ID', '68947641')
+GITLAB_PAT = os.getenv('GITLAB_PAT', 'your-personal-access-token')
+GITLAB_PROJECT_ID = os.getenv('GITLAB_PROJECT_ID', 'your-project-id')
 GITLAB_API_URL = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/repository"
+GITLAB_PROJECT_URL = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -76,6 +78,60 @@ def resize_and_save_image(file):
         logger.error(f"Error processing image {file.filename}: {str(e)}")
         return None
 
+def get_default_branch():
+    """Get the default branch of the GitLab project."""
+    try:
+        headers = {"Private-Token": GITLAB_PAT}
+        response = requests.get(GITLAB_PROJECT_URL, headers=headers)
+        if response.status_code == 200:
+            project_data = response.json()
+            default_branch = project_data.get('default_branch', 'main')
+            logger.info(f"Detected default branch: {default_branch}")
+            return default_branch
+        else:
+            logger.error(f"Failed to get default branch: {response.status_code} - {response.text}")
+            return 'main'
+    except Exception as e:
+        logger.error(f"Error getting default branch: {str(e)}")
+        return 'main'
+
+def ensure_images_directory(branch):
+    """Ensure the images/ directory exists in GitLab."""
+    try:
+        headers = {"Private-Token": GITLAB_PAT, "Content-Type": "application/json"}
+        # Check if images/ exists
+        response = requests.get(
+            f"{GITLAB_API_URL}/tree?path=images&ref={branch}",
+            headers=headers
+        )
+        if response.status_code == 200:
+            logger.info("images/ directory already exists.")
+            return True
+        
+        # Create a dummy file to initialize the directory
+        dummy_file = "images/.gitkeep"
+        encoded_path = urllib.parse.quote(dummy_file, safe='')
+        payload = {
+            "branch": branch,
+            "content": "",
+            "commit_message": "Initialize images/ directory",
+            "encoding": "text"
+        }
+        post_response = requests.post(
+            f"{GITLAB_API_URL}/files/{encoded_path}",
+            headers=headers,
+            data=json.dumps(payload)
+        )
+        if post_response.status_code in (200, 201):
+            logger.info("Created images/ directory with .gitkeep.")
+            return True
+        else:
+            logger.error(f"Failed to create images/ directory: {post_response.status_code} - {post_response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Error ensuring images/ directory: {str(e)}")
+        return False
+
 def push_images_to_gitlab():
     """Push images to GitLab and clear the directory."""
     try:
@@ -95,12 +151,19 @@ def push_images_to_gitlab():
             "Content-Type": "application/json"
         }
 
+        # Get default branch
+        branch = get_default_branch()
+        
+        # Ensure images/ directory exists
+        if not ensure_images_directory(branch):
+            return False, "Failed to ensure images/ directory exists."
+
         success_count = 0
         failed_files = []
         for image_file in image_files:
             image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_file)
             gitlab_path = f"images/{image_file}"
-            encoded_path = requests.utils.quote(gitlab_path, safe='')
+            encoded_path = urllib.parse.quote(gitlab_path, safe='')
             
             # Verify image before pushing
             try:
@@ -119,46 +182,50 @@ def push_images_to_gitlab():
             response = requests.get(
                 f"{GITLAB_API_URL}/files/{encoded_path}",
                 headers=headers,
-                params={"ref": "main"}
+                params={"ref": branch}
             )
             
             payload = {
-                "branch": "main",
+                "branch": branch,
                 "content": content,
                 "commit_message": f"Add or update image {image_file}",
                 "encoding": "base64"
             }
             
             api_success = False
-            if response.status_code == 200:
-                put_response = requests.put(
-                    f"{GITLAB_API_URL}/files/{encoded_path}",
-                    headers=headers,
-                    data=json.dumps(payload)
-                )
-                if put_response.status_code in (200, 201):
-                    logger.info(f"Updated {image_file} in GitLab.")
-                    api_success = True
+            for attempt in range(3):  # Retry up to 3 times
+                if response.status_code == 200:
+                    put_response = requests.put(
+                        f"{GITLAB_API_URL}/files/{encoded_path}",
+                        headers=headers,
+                        data=json.dumps(payload)
+                    )
+                    if put_response.status_code in (200, 201):
+                        logger.info(f"Updated {image_file} in GitLab (attempt {attempt + 1}).")
+                        api_success = True
+                        break
+                    else:
+                        logger.error(f"Failed to update {image_file} (attempt {attempt + 1}): {put_response.status_code} - {put_response.text}")
                 else:
-                    logger.error(f"Failed to update {image_file}: {put_response.status_code} - {put_response.text}")
-            else:
-                post_response = requests.post(
-                    f"{GITLAB_API_URL}/files/{encoded_path}",
-                    headers=headers,
-                    data=json.dumps(payload)
-                )
-                if post_response.status_code in (200, 201):
-                    logger.info(f"Created {image_file} in GitLab.")
-                    api_success = True
-                else:
-                    logger.error(f"Failed to create {image_file}: {post_response.status_code} - {post_response.text}")
+                    post_response = requests.post(
+                        f"{GITLAB_API_URL}/files/{encoded_path}",
+                        headers=headers,
+                        data=json.dumps(payload)
+                    )
+                    if post_response.status_code in (200, 201):
+                        logger.info(f"Created {image_file} in GitLab (attempt {attempt + 1}).")
+                        api_success = True
+                        break
+                    else:
+                        logger.error(f"Failed to create {image_file} (attempt {attempt + 1}): {post_response.status_code} - {post_response.text}")
+                time.sleep(1)  # Wait before retry
             
             if api_success:
                 # Verify file exists
                 verify_response = requests.get(
                     f"{GITLAB_API_URL}/files/{encoded_path}",
                     headers=headers,
-                    params={"ref": "main"}
+                    params={"ref": branch}
                 )
                 if verify_response.status_code == 200:
                     logger.info(f"Verified {image_file} in GitLab repository.")
