@@ -177,6 +177,7 @@ def upload_image():
             return jsonify({
                 'status': 'success',
                 'message': f'Image uploaded and saved as: {new_filename}',
+                'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}',
                 'filename': new_filename
             }), 200
         else:
@@ -217,6 +218,7 @@ def batch_upload_images():
                         'filename': file.filename,
                         'new_filename': new_filename,
                         'status': 'success',
+                        'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}',
                         'message': f'Image saved as: {new_filename}'
                     })
                 else:
