@@ -15,13 +15,13 @@ import shutil
 import io
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = '/tmp/images'  # Use /tmp for Render
+app.config['UPLOAD_FOLDER'] = '/tmp/images'
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB limit for Render
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB for Render
 
-# GitLab configuration (use environment variables for Render)
-GITLAB_PAT = os.getenv('GITLAB_PAT', 'your-personal-access-token')  # Set in Render dashboard
-GITLAB_PROJECT_ID = os.getenv('GITLAB_PROJECT_ID', '1212')  # e.g., '123456'
+# GitLab configuration
+GITLAB_PAT = os.getenv('GITLAB_PAT')
+GITLAB_PROJECT_ID = os.getenv('GITLAB_PROJECT_ID', '68947641')
 GITLAB_API_URL = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/repository"
 
 # Set up logging
@@ -29,12 +29,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def allowed_file(filename):
-    """Check if the file extension is allowed."""
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
 def generate_random_code():
-    """Generate a 4-digit random code."""
     return ''.join(random.choices(string.digits, k=4))
 
 def resize_and_save_image(file):
@@ -66,8 +63,13 @@ def resize_and_save_image(file):
             img.save(destination_path)
         
         file_size = os.path.getsize(destination_path)
-        if file_size > 10 * 1024 * 1024:  # Warn if >10MB
-            logger.warning(f"Image {new_filename} is {file_size / 1024 / 1024:.2f}MB")
+        logger.info(f"Processed {file.filename} as {new_filename}, size: {file_size / 1024 / 1024:.2f}MB")
+        if file_size > 10 * 1024 * 1024:
+            logger.warning(f"Image {new_filename} is large: {file_size / 1024 / 1024:.2f}MB")
+        
+        # Verify saved file
+        with Image.open(destination_path) as img_verify:
+            img_verify.verify()
         
         return new_filename
     except Exception as e:
@@ -75,7 +77,7 @@ def resize_and_save_image(file):
         return None
 
 def push_images_to_gitlab():
-    """Push images to GitLab using REST API and clear the directory."""
+    """Push images to GitLab and clear the directory."""
     try:
         if not os.path.exists(app.config['UPLOAD_FOLDER']):
             logger.info("No images directory found.")
@@ -86,24 +88,38 @@ def push_images_to_gitlab():
             logger.info("No images to push.")
             return False, "No images to push."
         
-        logger.info(f"Found {len(image_files)} images to push.")
+        logger.info(f"Found {len(image_files)} images to push: {image_files}")
 
         headers = {
             "Private-Token": GITLAB_PAT,
             "Content-Type": "application/json"
         }
 
+        success_count = 0
+        failed_files = []
         for image_file in image_files:
             image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_file)
             gitlab_path = f"images/{image_file}"
+            encoded_path = requests.utils.quote(gitlab_path, safe='')
             
+            # Verify image before pushing
+            try:
+                with Image.open(image_path) as img_verify:
+                    img_verify.verify()
+            except Exception as e:
+                logger.error(f"Image {image_file} corrupted before push: {str(e)}")
+                failed_files.append(image_file)
+                continue
+            
+            # Read and encode image
             with open(image_path, 'rb') as f:
                 content = base64.b64encode(f.read()).decode('utf-8')
             
-            # Check if file exists by listing commits
+            # Check if file exists
             response = requests.get(
-                f"{GITLAB_API_URL}/files/{requests.utils.quote(gitlab_path, safe='')}",
-                headers=headers
+                f"{GITLAB_API_URL}/files/{encoded_path}",
+                headers=headers,
+                params={"ref": "main"}
             )
             
             payload = {
@@ -113,35 +129,54 @@ def push_images_to_gitlab():
                 "encoding": "base64"
             }
             
+            api_success = False
             if response.status_code == 200:
-                # File exists, update it
                 put_response = requests.put(
-                    f"{GITLAB_API_URL}/files/{requests.utils.quote(gitlab_path, safe='')}",
+                    f"{GITLAB_API_URL}/files/{encoded_path}",
                     headers=headers,
                     data=json.dumps(payload)
                 )
-                if put_response.status_code not in (200, 201):
-                    logger.error(f"Failed to update {image_file}: {put_response.text}")
-                    continue
-                logger.info(f"Updated {image_file} in GitLab.")
+                if put_response.status_code in (200, 201):
+                    logger.info(f"Updated {image_file} in GitLab.")
+                    api_success = True
+                else:
+                    logger.error(f"Failed to update {image_file}: {put_response.status_code} - {put_response.text}")
             else:
-                # File does not exist, create it
                 post_response = requests.post(
-                    f"{GITLAB_API_URL}/files/{requests.utils.quote(gitlab_path, safe='')}",
+                    f"{GITLAB_API_URL}/files/{encoded_path}",
                     headers=headers,
                     data=json.dumps(payload)
                 )
-                if post_response.status_code not in (200, 201):
-                    logger.error(f"Failed to create {image_file}: {post_response.text}")
-                    continue
-                logger.info(f"Created {image_file} in GitLab.")
+                if post_response.status_code in (200, 201):
+                    logger.info(f"Created {image_file} in GitLab.")
+                    api_success = True
+                else:
+                    logger.error(f"Failed to create {image_file}: {post_response.status_code} - {post_response.text}")
+            
+            if api_success:
+                # Verify file exists
+                verify_response = requests.get(
+                    f"{GITLAB_API_URL}/files/{encoded_path}",
+                    headers=headers,
+                    params={"ref": "main"}
+                )
+                if verify_response.status_code == 200:
+                    logger.info(f"Verified {image_file} in GitLab repository.")
+                    success_count += 1
+                else:
+                    logger.error(f"Verification failed for {image_file}: {verify_response.status_code} - {verify_response.text}")
+                    failed_files.append(image_file)
+            else:
+                failed_files.append(image_file)
         
-        if image_files:
+        if success_count == len(image_files):
             shutil.rmtree(app.config['UPLOAD_FOLDER'])
             logger.info("Cleared images directory after push.")
-            return True, "Successfully pushed images to GitLab."
+            return True, f"Successfully pushed {success_count} images to GitLab."
         else:
-            return False, "No images were successfully pushed."
+            message = f"Pushed {success_count} images, failed {len(failed_files)}: {failed_files}"
+            logger.error(message)
+            return False, message
             
     except Exception as e:
         logger.error(f"Error pushing to GitLab: {str(e)}")
@@ -151,7 +186,8 @@ def gitlab_push_worker():
     """Worker to push images to GitLab every 10 minutes."""
     while True:
         logger.info("Worker checking for images to push...")
-        push_images_to_gitlab()
+        success, message = push_images_to_gitlab()
+        logger.info(message)
         time.sleep(600)
 
 @app.route('/api/upload', methods=['POST'])
@@ -177,8 +213,8 @@ def upload_image():
             return jsonify({
                 'status': 'success',
                 'message': f'Image uploaded and saved as: {new_filename}',
-                'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}',
-                'filename': new_filename
+                'filename': new_filename,
+                'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}'
             }), 200
         else:
             return jsonify({
@@ -218,8 +254,8 @@ def batch_upload_images():
                         'filename': file.filename,
                         'new_filename': new_filename,
                         'status': 'success',
-                        'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}',
-                        'message': f'Image saved as: {new_filename}'
+                        'message': f'Image saved as: {new_filename}',
+                        'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}'
                     })
                 else:
                     results.append({
@@ -252,12 +288,12 @@ def batch_upload_images():
         logger.error(f"Batch upload error: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': 'Request too large or server error. Try uploading images individually via /api/upload.'
+            'message': 'Request too large or server error. Try uploading images individually.'
         }), 413
 
 @app.route('/api/trigger-push', methods=['POST'])
 def trigger_push():
-    """Endpoint to manually trigger GitHub push."""
+    """Endpoint to manually trigger GitLab push."""
     success, message = push_images_to_gitlab()
     if success:
         return jsonify({
@@ -269,8 +305,6 @@ def trigger_push():
             'status': 'error',
             'message': message
         }), 400
-
-
 
 @app.route('/', methods=['GET', 'POST'])
 def upload_page():
@@ -285,7 +319,8 @@ def upload_page():
                         return jsonify({
                             'status': 'success',
                             'message': f'Image uploaded and saved as: {new_filename}',
-                            'filename': new_filename
+                            'filename': new_filename,
+                            'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}'
                         }), 200
                     else:
                         return jsonify({
@@ -302,7 +337,8 @@ def upload_page():
                             results.append({
                                 'filename': file.filename,
                                 'new_filename': new_filename,
-                                'status': 'success'
+                                'status': 'success',
+                                'url': f'https://easyfarms-assets.pages.dev/images/{new_filename}'
                             })
                         else:
                             results.append({
