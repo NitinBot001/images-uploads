@@ -21,8 +21,8 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB for Render
 
 # GitLab configuration
-GITLAB_PAT = os.getenv('GITLAB_PAT', 'your-personal-access-token')
-GITLAB_PROJECT_ID = os.getenv('GITLAB_PROJECT_ID', 'your-project-id')
+GITLAB_PAT = os.getenv('GITLAB_PAT')
+GITLAB_PROJECT_ID = '68981799'
 GITLAB_API_URL = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}/repository"
 GITLAB_PROJECT_URL = f"https://gitlab.com/api/v4/projects/{GITLAB_PROJECT_ID}"
 
